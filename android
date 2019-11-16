@@ -1,1 +1,20 @@
-ll 
+Android中为什么主线程不会因为Looper.loop()里的死循环卡死？ 这里涉及线程，先说说说进程/线程，进程：
+每个app运行时前首先创建一个进程，该进程是由Zygote fork出来的，用于承载App上运行的各种Activity/Service等组件。
+进程对于上层应用来说是完全透明的，这也是google有意为之，让App程序都是运行在Android Runtime。
+大多数情况一个App就运行在一个进程中，除非在AndroidManifest.xml中配置Android:process属性，
+或通过native代码fork进程。线程：线程对应用来说非常常见，比如每次new Thread().start都会创建一个新的线程。
+该线程与App所在进程之间资源共享，从Linux角度来说进程与线程除了是否共享资源外，并没有本质的区别，都是一个task_struct结构体，在CPU看来进程或线程无非就是一段可执行的代码，CPU采用CFS调度算法，保证每个task都尽可能公平的享有CPU时间片。有了这么准备，再说说死循环问题：对于线程既然是一段可执行的代码，当可执行代码执行完成后，线程生命周期便该终止了，线程退出。而对于主线程，我们是绝不希望会被运行一段时间，自己就退出，那么如何保证能一直存活呢？简单做法就是可执行代码是能一直执行下去的，死循环便能保证不会被退出，例如，binder线程也是采用死循环的方法，通过循环方式不同与Binder驱动进行读写操作，当然并非简单地死循环，无消息时会休眠。但这里可能又引发了另一个问题，既然是死循环又如何去处理其他事务呢？通过创建新线程的方式。真正会卡死主线程的操作是在回调方法onCreate/onStart/onResume等操作时间过长，会导致掉帧，甚至发生ANR，looper.loop本身不会导致应用卡死。(2) 没看见哪里有相关代码为这个死循环准备了一个新线程去运转？ 事实上，会在进入死循环之前便创建了新binder线程，在代码ActivityThread.main()中：public static void main(String[] args) {
+        ....
+
+        //创建Looper和MessageQueue对象，用于处理主线程的消息
+        Looper.prepareMainLooper();
+
+        //创建ActivityThread对象
+        ActivityThread thread = new ActivityThread(); 
+
+        //建立Binder通道 (创建新线程)
+        thread.attach(false);
+
+        Looper.loop(); //消息循环运行
+        throw new RuntimeException("Main thread loop unexpectedly exited");
+    }thread.attach(false)；便会创建一个Binder线程（具体是指ApplicationThread，Binder的服务端，用于接收系统服务AMS发送来的事件），该Binder线程通过Handler将Message发送给主线程，具体过程可查看 startService流程分析，这里不展开说，简单说Binder用于进程间通信，采用C/S架构。关于binder感兴趣的朋友，可查看我回答的另一个知乎问题：为什么Android要采用Binder作为IPC机制？ - Gityuan的回答另外，ActivityThread实际上并非线程，不像HandlerThread类，ActivityThread并没有真正继承Thread类，只是往往运行在主线程，该人以线程的感觉，其实承载ActivityThread的主线程就是由Zygote fork而创建的进程。主线程的死循环一直运行是不是特别消耗CPU资源呢？ 其实不然，这里就涉及到Linux pipe/epoll机制，简单说就是在主线程的MessageQueue没有消息时，便阻塞在loop的queue.next()中的nativePollOnce()方法里，详情见Android消息机制1-Handler(Java层)，此时主线程会释放CPU资源进入休眠状态，直到下个消息到达或者有事务发生，通过往pipe管道写端写入数据来唤醒主线程工作。这里采用的epoll机制，是一种IO多路复用机制，可以同时监控多个描述符，当某个描述符就绪(读或写就绪)，则立刻通知相应程序进行读或写操作，本质同步I/O，即读写是阻塞的。 所以说，主线程大多数时候都是处于休眠状态，并不会消耗大量CPU资源。
