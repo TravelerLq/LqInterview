@@ -31,6 +31,8 @@ Android中为什么主线程不会因为Looper.loop()里的死循环卡死？ �
     
  3）为什么Activity的生命周期在死循环体外是如何运行起来的？
   主要是通过ActivityThread innerclass H 在接受Message时会调用H.handleMessage(msg)中根据msg处理不同消息，
-  例如收到msg=H.LAUCHN_ACTIVITY,调用handleLauchActivity(),最终通过反射机制创建Activity实例，再调用Activity.onCreate()
+  例如收到msg=H.LAUCHN_ACTIVITY,调用handleLauchActivity(),最终通过反射机制创建Activity实例，再调用Activity.onCreate().
+  
+  
        
  
